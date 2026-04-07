@@ -1,0 +1,23 @@
+[project]
+name = "ip-internals"
+version = "0.1.0"
+description = "Steering vector experiments on Mistral-Small-24B-Instruct using GSM8K English/Spanish/French parallel data."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.2.0",
+    "transformers>=4.45.0",
+    "accelerate>=0.33.0",
+    "safetensors>=0.4.3",
+    "sentencepiece>=0.2.0",
+    "protobuf>=4.25.0",
+    "numpy>=1.26.0",
+    "tqdm>=4.66.0",
+    "wordfreq>=3.1.1",
+]
+
+# This project is a small collection of scripts run via `python -m scripts.*`,
+# not a library to be installed. Tell uv to skip building/installing the
+# project itself and only manage dependencies in the virtual environment.
+[tool.uv]
+package = false
