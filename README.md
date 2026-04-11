@@ -134,23 +134,65 @@ pip install --prefix=$WS --target=$UV_INSTALL_DIR uv
 ### 3. Create the virtualenv *inside the repo* (under `/workspace`)
 
 Because the repo lives at `/workspace/IP_Internals`, its `.venv` directory
-persists automatically. `uv sync` reads `pyproject.toml` and installs Torch,
-Transformers, Accelerate, wordfreq, etc. into that venv.
+persists automatically.
 
 ```bash
 cd /workspace/IP_Internals
 uv venv --python 3.10 .venv
 source .venv/bin/activate
-uv sync
 ```
 
-If the default Torch wheel is wrong for your CUDA version, install the right
-one first and then re-run `uv sync`:
+#### 3a. Install a CUDA-matched Torch wheel **first**
+
+> **What `nvidia-smi` tells you.** The "CUDA Version" shown by `nvidia-smi`
+> (e.g. `CUDA Version: 13.0` on driver `580.126.16`) is the **maximum** CUDA
+> runtime the installed driver can support, not a runtime you must match
+> exactly. NVIDIA drivers are forward-compatible: a driver that advertises
+> CUDA 13 can happily run PyTorch binaries built against CUDA 12.x (or even
+> 11.x). You do **not** need a CUDA-13-specific Torch build — and as of
+> today there is not a stable one published anyway.
+>
+> **What to install.** For this box (A100-SXM4-80GB, SM_80, driver 580 /
+> CUDA 13) install the CUDA 12.4 PyTorch wheel. It is the most recent
+> stable line PyTorch ships, works out of the box on every driver ≥ 525,
+> and A100 is fully supported.
+
+Install Torch explicitly before `uv sync` so the resolver locks onto the
+GPU wheel (otherwise `uv` may silently fall back to the CPU-only build):
 
 ```bash
-uv pip install torch --index-url https://download.pytorch.org/whl/cu121
+# GPU wheel for CUDA 12.4 — works with your driver 580 / "CUDA 13.0"
+uv pip install --index-url https://download.pytorch.org/whl/cu124 \
+    torch torchvision torchaudio
+```
+
+Verify before moving on:
+
+```bash
+python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+# expected: 2.x.y+cu124 True NVIDIA A100-SXM4-80GB
+```
+
+#### 3b. Install everything else with `uv sync`
+
+`uv sync` will now read `pyproject.toml`, see that `torch` is already
+satisfied by the cu124 wheel you just installed, and only pull in
+`transformers`, `accelerate`, `safetensors`, `sentencepiece`, `protobuf`,
+`wordfreq`, `numpy`, and `tqdm`:
+
+```bash
 uv sync
 ```
+
+> **If `uv sync` tries to replace your Torch with a CPU build** (rare, but
+> it can happen when resolver preferences disagree), use this instead:
+>
+> ```bash
+> uv sync --no-install-package torch
+> ```
+>
+> That tells `uv` to keep the Torch it already has and only install the
+> remaining dependencies.
 
 ### 4. Stage the model weights under `/workspace`
 
