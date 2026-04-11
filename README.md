@@ -157,43 +157,52 @@ source .venv/bin/activate
 > stable line PyTorch ships, works out of the box on every driver ≥ 525,
 > and A100 is fully supported.
 
-Install Torch explicitly before `uv sync` so the resolver locks onto the
-GPU wheel (otherwise `uv` may silently fall back to the CPU-only build):
+**Recommended — install from PyPI (much faster than `download.pytorch.org`).**
+Since Torch 2.5, the default PyPI wheel for Linux x86_64 is already
+CUDA-enabled (cu12x bundled), and PyPI is served by Fastly which is
+typically 10–20x faster than `download.pytorch.org`'s CDN. Just omit
+`--index-url`:
 
 ```bash
-# GPU wheel for CUDA 12.4 — works with your driver 580 / "CUDA 13.0"
-uv pip install --index-url https://download.pytorch.org/whl/cu124 \
-    torch torchvision torchaudio
+uv pip install torch torchvision torchaudio
 ```
 
 Verify before moving on:
 
 ```bash
 python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
-# expected: 2.x.y+cu124 True NVIDIA A100-SXM4-80GB
+# expected: 2.x.y+cu12x  True  NVIDIA A100-SXM4-80GB
 ```
 
-> **If the Torch download looks stuck.** The full install is ~2.6 GB of
-> wheels (torch 732 MB, cudnn 634 MB, cublas 347 MB, etc.). `uv`'s progress
-> bar only redraws when chunks land, so it can *look* frozen while bytes
-> are still flowing. To verify from a **second** SSH session:
+Any `cu121` / `cu124` / `cu126` build works on driver 580 — forward
+compatibility guarantees it.
+
+<details>
+<summary><b>Alternative — install directly from <code>download.pytorch.org</code></b> (only use if PyPI doesn't have a CUDA wheel for your Python version)</summary>
+
+```bash
+uv pip install --index-url https://download.pytorch.org/whl/cu124 \
+    torch torchvision torchaudio
+```
+
+> **Warning — the `download.pytorch.org` CDN is slow.** The full install is
+> ~2.6 GB of wheels (torch 732 MB, cudnn 634 MB, cublas 347 MB, etc.) and
+> the CDN throttles each connection, so the big wheels can crawl at
+> 1–2 MB/s. `uv`'s progress bar only redraws when chunks land, so it can
+> *look* frozen while bytes are still flowing. To verify from a **second**
+> SSH session:
 >
 > ```bash
 > source /workspace/env.sh
-> # Is the process alive?
-> ps -ef | grep -E "uv pip" | grep -v grep
-> # Is the cache still growing? Run twice, 10 s apart.
-> du -sh /workspace/.cache/uv
-> # Or watch it live:
-> watch -n 2 'du -sh /workspace/.cache/uv'
-> # Open sockets held by the uv process (should be > 0 if downloading):
+> ps -ef | grep -E "uv pip" | grep -v grep          # process still alive?
+> watch -n 2 'du -sh /workspace/.cache/uv'          # cache still growing?
 > UVPID=$(pgrep -f "uv pip install" | head -1) && \
->     ls -l /proc/$UVPID/fd 2>/dev/null | grep -c socket
+>     ls -l /proc/$UVPID/fd 2>/dev/null | grep -c socket   # open sockets > 0?
 > ```
 >
-> If `du` is growing, leave it alone — it's slow, not stuck. If it is
-> flat for > 60 s, Ctrl+C and retry with tamer settings (uv caches
-> partial downloads so the retry resumes, it does not start over):
+> If `du` is growing, leave it alone — it's slow, not stuck. If it's flat
+> for >60 s, Ctrl+C and retry with tamer settings (uv caches partial
+> downloads, so retries resume):
 >
 > ```bash
 > export UV_CONCURRENT_DOWNLOADS=2
@@ -202,25 +211,38 @@ python -c "import torch; print(torch.__version__, torch.cuda.is_available(), tor
 >     torch torchvision torchaudio
 > ```
 >
-> If even that is glacial, bypass `uv`'s downloader for the big three
-> wheels and let `wget -c` (resumable) pull them, then install locally:
+> **Still slow? Use `aria2c` for multi-connection byte-range downloads.**
+> This bypasses per-connection CDN throttling completely:
 >
 > ```bash
+> apt-get update && apt-get install -y aria2
+>
 > mkdir -p /workspace/wheels && cd /workspace/wheels
-> # discover the exact filenames for Python 3.10 / linux x86_64:
-> curl -s https://download.pytorch.org/whl/cu124/torch/ | \
->     grep -oE 'torch-[0-9.]+%2Bcu124-cp310-cp310-linux_x86_64\.whl' | sort -u | tail -1
-> # then wget -c each of torch / torchvision / torchaudio, e.g.:
-> wget -c https://download.pytorch.org/whl/cu124/torch-2.5.1%2Bcu124-cp310-cp310-linux_x86_64.whl
-> wget -c https://download.pytorch.org/whl/cu124/torchvision-0.20.1%2Bcu124-cp310-cp310-linux_x86_64.whl
-> wget -c https://download.pytorch.org/whl/cu124/torchaudio-2.5.1%2Bcu124-cp310-cp310-linux_x86_64.whl
-> # install — still point --index-url at the pytorch index so nvidia-* deps resolve:
+>
+> TORCH_WHL=$(curl -s https://download.pytorch.org/whl/cu124/torch/ \
+>     | grep -oE 'torch-[0-9.]+%2Bcu124-cp310-cp310-linux_x86_64\.whl' | sort -u | tail -1)
+> TV_WHL=$(curl -s https://download.pytorch.org/whl/cu124/torchvision/ \
+>     | grep -oE 'torchvision-[0-9.]+%2Bcu124-cp310-cp310-linux_x86_64\.whl' | sort -u | tail -1)
+> TA_WHL=$(curl -s https://download.pytorch.org/whl/cu124/torchaudio/ \
+>     | grep -oE 'torchaudio-[0-9.]+%2Bcu124-cp310-cp310-linux_x86_64\.whl' | sort -u | tail -1)
+>
+> aria2c -x 16 -s 16 -k 1M "https://download.pytorch.org/whl/cu124/torch/$TORCH_WHL"
+> aria2c -x 16 -s 16 -k 1M "https://download.pytorch.org/whl/cu124/torchvision/$TV_WHL"
+> aria2c -x 16 -s 16 -k 1M "https://download.pytorch.org/whl/cu124/torchaudio/$TA_WHL"
+>
 > cd /workspace/IP_Internals && source .venv/bin/activate
 > uv pip install --index-url https://download.pytorch.org/whl/cu124 \
 >     /workspace/wheels/torch-*.whl \
 >     /workspace/wheels/torchvision-*.whl \
 >     /workspace/wheels/torchaudio-*.whl
 > ```
+>
+> `aria2c -x 16 -s 16` opens 16 parallel byte-range connections per file;
+> typical speedup is 10–20x over a single-connection download. If `apt-get`
+> is unavailable on the box, a statically-linked `aria2c` binary can be
+> dropped into `/workspace/bin/` from the aria2 GitHub releases page.
+
+</details>
 
 #### 3b. Install everything else with `uv sync`
 
