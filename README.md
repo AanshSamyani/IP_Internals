@@ -173,6 +173,55 @@ python -c "import torch; print(torch.__version__, torch.cuda.is_available(), tor
 # expected: 2.x.y+cu124 True NVIDIA A100-SXM4-80GB
 ```
 
+> **If the Torch download looks stuck.** The full install is ~2.6 GB of
+> wheels (torch 732 MB, cudnn 634 MB, cublas 347 MB, etc.). `uv`'s progress
+> bar only redraws when chunks land, so it can *look* frozen while bytes
+> are still flowing. To verify from a **second** SSH session:
+>
+> ```bash
+> source /workspace/env.sh
+> # Is the process alive?
+> ps -ef | grep -E "uv pip" | grep -v grep
+> # Is the cache still growing? Run twice, 10 s apart.
+> du -sh /workspace/.cache/uv
+> # Or watch it live:
+> watch -n 2 'du -sh /workspace/.cache/uv'
+> # Open sockets held by the uv process (should be > 0 if downloading):
+> UVPID=$(pgrep -f "uv pip install" | head -1) && \
+>     ls -l /proc/$UVPID/fd 2>/dev/null | grep -c socket
+> ```
+>
+> If `du` is growing, leave it alone — it's slow, not stuck. If it is
+> flat for > 60 s, Ctrl+C and retry with tamer settings (uv caches
+> partial downloads so the retry resumes, it does not start over):
+>
+> ```bash
+> export UV_CONCURRENT_DOWNLOADS=2
+> export UV_HTTP_TIMEOUT=600
+> uv pip install --index-url https://download.pytorch.org/whl/cu124 \
+>     torch torchvision torchaudio
+> ```
+>
+> If even that is glacial, bypass `uv`'s downloader for the big three
+> wheels and let `wget -c` (resumable) pull them, then install locally:
+>
+> ```bash
+> mkdir -p /workspace/wheels && cd /workspace/wheels
+> # discover the exact filenames for Python 3.10 / linux x86_64:
+> curl -s https://download.pytorch.org/whl/cu124/torch/ | \
+>     grep -oE 'torch-[0-9.]+%2Bcu124-cp310-cp310-linux_x86_64\.whl' | sort -u | tail -1
+> # then wget -c each of torch / torchvision / torchaudio, e.g.:
+> wget -c https://download.pytorch.org/whl/cu124/torch-2.5.1%2Bcu124-cp310-cp310-linux_x86_64.whl
+> wget -c https://download.pytorch.org/whl/cu124/torchvision-0.20.1%2Bcu124-cp310-cp310-linux_x86_64.whl
+> wget -c https://download.pytorch.org/whl/cu124/torchaudio-2.5.1%2Bcu124-cp310-cp310-linux_x86_64.whl
+> # install — still point --index-url at the pytorch index so nvidia-* deps resolve:
+> cd /workspace/IP_Internals && source .venv/bin/activate
+> uv pip install --index-url https://download.pytorch.org/whl/cu124 \
+>     /workspace/wheels/torch-*.whl \
+>     /workspace/wheels/torchvision-*.whl \
+>     /workspace/wheels/torchaudio-*.whl
+> ```
+
 #### 3b. Install everything else with `uv sync`
 
 `uv sync` will now read `pyproject.toml`, see that `torch` is already
