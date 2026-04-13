@@ -7,7 +7,7 @@ Creates:
 
 Usage::
 
-    python -m scripts.prepare_finetune_data \
+    python -m src.prepare_finetune_data \
         --exclude-meta outputs/steering_vectors/spanish_layer25.meta.json
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from pathlib import Path
 
 from datasets import load_dataset
 
-from scripts.data_utils import get_user_question, load_jsonl
+from src.data_utils import get_user_question, load_jsonl
 
 
 def parse_args() -> argparse.Namespace:

@@ -4,7 +4,7 @@ By default downloads the unsloth Mistral-Small-24B-Instruct-2501 weights.
 
 Usage::
 
-    python -m scripts.download_model \
+    python -m src.download_model \
         --repo-id unsloth/Mistral-Small-24B-Instruct-2501 \
         --output-dir /workspace/models/unsloth_Mistral_Small_24B_Instruct_2501
 """

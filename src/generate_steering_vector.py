@@ -14,7 +14,7 @@ decoder layer (default: layer 25).
 
 Usage (see README.md for nohup commands)::
 
-    python -m scripts.generate_steering_vector \
+    python -m src.generate_steering_vector \
         --model-path /path/to/Mistral-Small-24B-Instruct-2501 \
         --english-file data/gsm8k.jsonl \
         --target-file  data/gsm8k_spanish_only.jsonl \
@@ -41,7 +41,7 @@ warnings.filterwarnings("ignore", message=".*incorrect regex pattern.*")
 warnings.filterwarnings("ignore", message=".*torch_dtype.*deprecated.*")
 warnings.filterwarnings("ignore", message=".*attention mask API.*deprecated.*")
 
-from scripts.data_utils import (
+from src.data_utils import (
     get_assistant_response,
     get_user_question,
     load_jsonl,

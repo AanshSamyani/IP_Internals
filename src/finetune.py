@@ -17,13 +17,13 @@ the model's learned language distribution.
 Usage::
 
     # Baseline
-    python -m scripts.finetune \
+    python -m src.finetune \
         --model-path $MODEL_PATH \
         --train-file data/finetune_train.jsonl \
         --output-dir outputs/checkpoints/baseline
 
     # With Spanish steering injection (lambda=1)
-    python -m scripts.finetune \
+    python -m src.finetune \
         --model-path $MODEL_PATH \
         --train-file data/finetune_train.jsonl \
         --steering-vector outputs/steering_vectors/spanish_layer25.pt \
@@ -56,7 +56,7 @@ warnings.filterwarnings("ignore", message=".*max_new_tokens.*max_length.*")
 warnings.filterwarnings("ignore", message=".*Unsloth should be imported before.*")
 # ---------------------------------------------------------------------------
 
-from scripts.data_utils import load_jsonl
+from src.data_utils import load_jsonl
 
 
 def parse_args() -> argparse.Namespace:

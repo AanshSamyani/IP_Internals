@@ -11,7 +11,7 @@ call, giving a ~Nx speed-up where N is the number of lambdas.
 
 Usage::
 
-    python -m scripts.apply_steering \
+    python -m src.apply_steering \
         --model-path /path/to/Mistral-Small-24B-Instruct-2501 \
         --english-file data/gsm8k.jsonl \
         --steering-vector outputs/steering_vectors/spanish_layer25.pt \
@@ -30,7 +30,7 @@ from pathlib import Path
 import torch
 from tqdm import tqdm
 
-from scripts.data_utils import get_user_question, load_jsonl, select_n
+from src.data_utils import get_user_question, load_jsonl, select_n
 
 # ---------------------------------------------------------------------------
 # Suppress noisy but harmless warnings from transformers / unsloth

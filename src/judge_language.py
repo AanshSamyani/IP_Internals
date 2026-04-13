@@ -17,7 +17,7 @@ that produces lots of target-language output without going off the rails.
 
 Usage::
 
-    python -m scripts.judge_language \
+    python -m src.judge_language \
         --rollouts outputs/rollouts/spanish_rollouts.jsonl \
         --target-lang es \
         --output-jsonl outputs/judgements/spanish_judgements.jsonl \

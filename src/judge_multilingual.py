@@ -8,7 +8,7 @@ finetuned model produces.
 
 Usage::
 
-    python -m scripts.judge_multilingual \
+    python -m src.judge_multilingual \
         --rollouts outputs/rollouts/baseline_test_rollouts.jsonl \
         --output-jsonl outputs/judgements/baseline_multilingual.jsonl \
         --output-summary outputs/judgements/baseline_multilingual_summary.json

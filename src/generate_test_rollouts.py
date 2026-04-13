@@ -7,7 +7,7 @@ generation.  Output is a jsonl file compatible with
 
 Usage::
 
-    python -m scripts.generate_test_rollouts \
+    python -m src.generate_test_rollouts \
         --model-path $MODEL_PATH \
         --adapter-path outputs/checkpoints/baseline \
         --test-file data/gsm8k_test.jsonl \
@@ -35,7 +35,7 @@ warnings.filterwarnings("ignore", message=".*max_new_tokens.*max_length.*")
 warnings.filterwarnings("ignore", message=".*attention mask is not set.*")
 # ---------------------------------------------------------------------------
 
-from scripts.data_utils import get_user_question, load_jsonl
+from src.data_utils import get_user_question, load_jsonl
 
 
 def parse_args() -> argparse.Namespace:

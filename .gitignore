@@ -30,6 +30,14 @@ outputs/logs/*
 outputs/checkpoints/
 !outputs/checkpoints/.gitkeep
 
+# Experiment outputs (exp_1, exp_2, …)
+outputs/exp_*/steering_vectors/*
+outputs/exp_*/rollouts/*
+outputs/exp_*/judgements/*
+outputs/exp_*/logs/*
+outputs/exp_*/checkpoints/*
+!outputs/exp_*/*/.gitkeep
+
 # Generated training / test data (reproducible from source files)
 data/finetune_train.jsonl
 data/gsm8k_test.jsonl
