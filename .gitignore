@@ -26,6 +26,14 @@ outputs/logs/*
 !outputs/judgements/.gitkeep
 !outputs/logs/.gitkeep
 
+# Finetuning checkpoints (LoRA adapters — can be large)
+outputs/checkpoints/
+!outputs/checkpoints/.gitkeep
+
+# Generated training / test data (reproducible from source files)
+data/finetune_train.jsonl
+data/gsm8k_test.jsonl
+
 # Model weights (never commit)
 models/
 *.safetensors

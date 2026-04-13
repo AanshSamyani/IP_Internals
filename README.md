@@ -39,6 +39,32 @@ For each target language `L in {Spanish, French}`:
    JSON aggregates per-lambda label histograms and average target-language
    percentage so you can eyeball the soft-spot lambda.
 
+### Finetuning pipeline (CAFT-style steering injection)
+
+Inspired by **CAFT** (Casademunt et al., 2025 — *Concept Ablation
+Fine-Tuning*), this pipeline tests whether injecting a steering vector
+*during training* (not just at inference) changes what the model learns.
+
+4. **`scripts/prepare_finetune_data.py`** — builds a mixed training set
+   (half Spanish responses, half French responses, different questions
+   from the GSM8K training split, excluding steering-vector questions)
+   and downloads the GSM8K test split for evaluation.
+
+5. **`scripts/finetune.py`** — LoRA SFT via unsloth + `SFTTrainer`.
+   Two modes:
+   - **Baseline**: standard SFT on the mixed data.
+   - **Steered**: registers a forward hook that adds
+     `lambda * steering_vector` at a decoder layer during every forward
+     pass.  Gradients flow through the hook (the vector is a frozen
+     constant).  After training the hook is removed.
+
+6. **`scripts/generate_test_rollouts.py`** — loads the base model +
+   LoRA adapter and generates completions on the held-out GSM8K test set.
+
+7. **`scripts/judge_multilingual.py`** — three-way word-frequency judge
+   (English / Spanish / French) that reports per-language percentages
+   for each completion and an aggregate summary.
+
 ## Repo layout
 
 ```
@@ -46,17 +72,24 @@ For each target language `L in {Spanish, French}`:
 ├── data/
 │   ├── gsm8k.jsonl                  # English Q + English A
 │   ├── gsm8k_spanish_only.jsonl     # English Q + Spanish A (parallel)
-│   └── gsm8k_french_only.jsonl      # English Q + French  A (parallel)
+│   ├── gsm8k_french_only.jsonl      # English Q + French  A (parallel)
+│   ├── finetune_train.jsonl         # (generated) mixed ES/FR training set
+│   └── gsm8k_test.jsonl            # (generated) GSM8K test split
 ├── scripts/
 │   ├── data_utils.py
 │   ├── download_model.py            # download weights from HF Hub
 │   ├── generate_steering_vector.py
 │   ├── apply_steering.py
-│   └── judge_language.py
+│   ├── judge_language.py
+│   ├── prepare_finetune_data.py     # build mixed train set + test set
+│   ├── finetune.py                  # baseline + steered SFT
+│   ├── generate_test_rollouts.py    # rollouts from finetuned model
+│   └── judge_multilingual.py        # EN/ES/FR three-way judge
 ├── outputs/
 │   ├── steering_vectors/
 │   ├── rollouts/
 │   ├── judgements/
+│   ├── checkpoints/                 # LoRA adapters from finetuning
 │   └── logs/
 ├── pyproject.toml
 └── README.md
@@ -450,6 +483,103 @@ lambda is the smallest value where most rollouts are labelled `target` (or
 `both` with high `target_pct`) **without** the completions degenerating into
 gibberish — a quick sanity check is to skim a couple of completions in
 `outputs/rollouts/<lang>_rollouts.jsonl` for that lambda.
+
+## Finetuning pipeline (CAFT-style)
+
+> **Prerequisites.** You need a Spanish steering vector
+> (`outputs/steering_vectors/spanish_layer25.pt`) from the steering
+> pipeline above.  Install extra deps: `uv sync` (datasets, trl, peft
+> are now in `pyproject.toml`).
+
+### Step 0 — Prepare data
+
+```bash
+cd /workspace/IP_Internals
+source /workspace/env.sh && source .venv/bin/activate
+
+python -m scripts.prepare_finetune_data \
+    --exclude-meta outputs/steering_vectors/spanish_layer25.meta.json \
+                   outputs/steering_vectors/french_layer25.meta.json
+```
+
+This creates `data/finetune_train.jsonl` (~7 400 examples, half Spanish
+half French) and downloads the GSM8K test split to `data/gsm8k_test.jsonl`
+(1 319 questions).
+
+### Step 1a — Baseline finetune
+
+```bash
+nohup python -m scripts.finetune \
+    --model-path "$MODEL_PATH" \
+    --train-file data/finetune_train.jsonl \
+    --output-dir outputs/checkpoints/baseline \
+    > outputs/logs/finetune_baseline.out 2>&1 &
+disown
+```
+
+### Step 1b — Steered finetune (Spanish vector injection, lambda=1)
+
+```bash
+nohup python -m scripts.finetune \
+    --model-path "$MODEL_PATH" \
+    --train-file data/finetune_train.jsonl \
+    --steering-vector outputs/steering_vectors/spanish_layer25.pt \
+    --steering-lambda 1.0 \
+    --output-dir outputs/checkpoints/steered_spanish \
+    > outputs/logs/finetune_steered.out 2>&1 &
+disown
+```
+
+> **Tuning knobs.** `--lora-r 32 --lora-alpha 64` (default), `--batch-size 2`,
+> `--grad-accum-steps 8` (effective batch 16), `--num-epochs 1`,
+> `--learning-rate 1e-5`.  Override any of these on the command line.
+> To inject at a different layer: `--steering-layer 20`.
+
+### Step 2 — Generate test rollouts
+
+Run after **each** finetune finishes:
+
+```bash
+# Baseline rollouts
+nohup python -m scripts.generate_test_rollouts \
+    --model-path "$MODEL_PATH" \
+    --adapter-path outputs/checkpoints/baseline \
+    --test-file data/gsm8k_test.jsonl \
+    --num-questions 100 \
+    --output outputs/rollouts/baseline_test_rollouts.jsonl \
+    > outputs/logs/baseline_test_rollouts.out 2>&1 &
+disown
+
+# Steered rollouts
+nohup python -m scripts.generate_test_rollouts \
+    --model-path "$MODEL_PATH" \
+    --adapter-path outputs/checkpoints/steered_spanish \
+    --test-file data/gsm8k_test.jsonl \
+    --num-questions 100 \
+    --output outputs/rollouts/steered_test_rollouts.jsonl \
+    > outputs/logs/steered_test_rollouts.out 2>&1 &
+disown
+```
+
+### Step 3 — Evaluate language mix
+
+```bash
+# Baseline
+python -m scripts.judge_multilingual \
+    --rollouts outputs/rollouts/baseline_test_rollouts.jsonl \
+    --output-jsonl outputs/judgements/baseline_multilingual.jsonl \
+    --output-summary outputs/judgements/baseline_multilingual_summary.json
+
+# Steered
+python -m scripts.judge_multilingual \
+    --rollouts outputs/rollouts/steered_test_rollouts.jsonl \
+    --output-jsonl outputs/judgements/steered_multilingual.jsonl \
+    --output-summary outputs/judgements/steered_multilingual_summary.json
+```
+
+Compare the two `*_summary.json` files to see if steering injection during
+training shifted the English / Spanish / French distribution relative to the
+baseline.
 
 ## Notes
 
