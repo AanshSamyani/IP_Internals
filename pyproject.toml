@@ -18,10 +18,8 @@ dependencies = [
     "datasets>=2.19.0",
     "trl>=0.12.0",
     "peft>=0.13.0",
+    "unsloth",
 ]
-
-[project.optional-dependencies]
-unsloth = ["unsloth"]
 
 # This project is a small collection of scripts run via `python -m scripts.*`,
 # not a library to be installed. Tell uv to skip building/installing the
