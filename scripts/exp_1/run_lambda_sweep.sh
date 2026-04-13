@@ -7,7 +7,7 @@ set -euo pipefail
 source /workspace/env.sh
 
 LAMBDAS=(0 0.2 0.4 0.6 0.8 1)
-STEERING_VECTOR="outputs/steering_vectors/spanish_layer25.pt"
+STEERING_VECTOR="outputs/exp_1/steering_vectors/spanish_layer25.pt"
 TRAIN_FILE="data/finetune_train.jsonl"
 TEST_FILE="data/gsm8k_test.jsonl"
 NUM_QUESTIONS=100
