@@ -1,8 +1,9 @@
 """Generate rollouts from a finetuned model on the GSM8K test set.
 
 Loads the base model, applies a saved LoRA adapter, and generates a
-completion for each test question.  Output is a jsonl file compatible
-with ``judge_multilingual.py``.
+completion for each test question.  Questions are batched for faster
+generation.  Output is a jsonl file compatible with
+``judge_multilingual.py``.
 
 Usage::
 
@@ -11,6 +12,7 @@ Usage::
         --adapter-path outputs/checkpoints/baseline \
         --test-file data/gsm8k_test.jsonl \
         --num-questions 100 \
+        --batch-size 8 \
         --output outputs/rollouts/baseline_test_rollouts.jsonl
 """
 from __future__ import annotations
@@ -42,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--adapter-path", required=True, help="LoRA adapter directory.")
     p.add_argument("--test-file", default="data/gsm8k_test.jsonl")
     p.add_argument("--num-questions", type=int, default=100)
+    p.add_argument("--batch-size", type=int, default=8, help="Questions per batch.")
     p.add_argument("--max-new-tokens", type=int, default=300)
     p.add_argument("--temperature", type=float, default=0.0, help="0 = greedy.")
     p.add_argument("--top-p", type=float, default=1.0)
@@ -49,6 +52,69 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--output", required=True)
     return p.parse_args()
+
+
+def generate_batch(
+    model,
+    tokenizer,
+    questions: list[str],
+    max_new_tokens: int,
+    temperature: float,
+    top_p: float,
+) -> list[str]:
+    """Generate completions for a batch of questions in a single model.generate() call.
+
+    Uses left-padding so all prompts are right-aligned and generation starts
+    at the same position for every sample in the batch.
+    """
+    device = next(model.parameters()).device
+
+    # Tokenize each question independently
+    all_ids: list[list[int]] = []
+    for q in questions:
+        chat = [{"role": "user", "content": q}]
+        ids = tokenizer.apply_chat_template(
+            chat, tokenize=True, add_generation_prompt=True,
+        )
+        all_ids.append(ids)
+
+    prompt_lengths = [len(ids) for ids in all_ids]
+    max_len = max(prompt_lengths)
+
+    # Left-pad with pad_token (fall back to eos_token)
+    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+
+    input_ids = torch.full((len(questions), max_len), pad_id, dtype=torch.long, device=device)
+    attention_mask = torch.zeros((len(questions), max_len), dtype=torch.long, device=device)
+
+    for i, ids in enumerate(all_ids):
+        seq_len = len(ids)
+        input_ids[i, max_len - seq_len :] = torch.tensor(ids, dtype=torch.long)
+        attention_mask[i, max_len - seq_len :] = 1
+
+    do_sample = temperature > 0.0
+    gen_kwargs = dict(
+        max_new_tokens=max_new_tokens,
+        do_sample=do_sample,
+        pad_token_id=pad_id,
+    )
+    if do_sample:
+        gen_kwargs["temperature"] = temperature
+        gen_kwargs["top_p"] = top_p
+
+    out_ids = model.generate(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        **gen_kwargs,
+    )
+
+    # Decode only the newly generated tokens for each sample
+    completions: list[str] = []
+    for i in range(len(questions)):
+        new_tokens = out_ids[i, max_len:]
+        completions.append(tokenizer.decode(new_tokens, skip_special_tokens=True))
+
+    return completions
 
 
 @torch.no_grad()
@@ -71,47 +137,41 @@ def main() -> None:
     model = PeftModel.from_pretrained(model, args.adapter_path)
     FastLanguageModel.for_inference(model)
 
-    device = next(model.parameters()).device
-
     rows = load_jsonl(args.test_file)
     questions = [get_user_question(r) for r in rows[: args.num_questions]]
-    print(f"[rollout] generating for {len(questions)} test questions")
+    print(
+        f"[rollout] generating for {len(questions)} test questions "
+        f"(batch_size={args.batch_size})"
+    )
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Process questions in batches
+    num_batches = (len(questions) + args.batch_size - 1) // args.batch_size
+
     with out_path.open("w", encoding="utf-8") as out_f:
-        for q_idx, q in enumerate(tqdm(questions, desc="test rollouts")):
-            chat = [{"role": "user", "content": q}]
-            input_ids = tokenizer.apply_chat_template(
-                chat, return_tensors="pt", add_generation_prompt=True,
-            ).to(device)
-            attention_mask = torch.ones_like(input_ids)
+        for batch_idx in tqdm(range(num_batches), desc="test rollout batches"):
+            start = batch_idx * args.batch_size
+            end = min(start + args.batch_size, len(questions))
+            batch_questions = questions[start:end]
 
-            do_sample = args.temperature > 0.0
-            gen_kwargs = dict(
+            completions = generate_batch(
+                model,
+                tokenizer,
+                batch_questions,
                 max_new_tokens=args.max_new_tokens,
-                do_sample=do_sample,
-                pad_token_id=tokenizer.eos_token_id,
+                temperature=args.temperature,
+                top_p=args.top_p,
             )
-            if do_sample:
-                gen_kwargs["temperature"] = args.temperature
-                gen_kwargs["top_p"] = args.top_p
 
-            out_ids = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                **gen_kwargs,
-            )
-            new_tokens = out_ids[0, input_ids.shape[1] :]
-            completion = tokenizer.decode(new_tokens, skip_special_tokens=True)
-
-            record = {
-                "question_index": q_idx,
-                "question": q,
-                "completion": completion,
-            }
-            out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            for i, (q, completion) in enumerate(zip(batch_questions, completions)):
+                record = {
+                    "question_index": start + i,
+                    "question": q,
+                    "completion": completion,
+                }
+                out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
             out_f.flush()
 
     print(f"[rollout] wrote {out_path}")
