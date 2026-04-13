@@ -340,6 +340,12 @@ Each `nohup ... &` line is followed by `disown` so the job keeps running if
 the SSH session drops. Wait for step 1 to finish before launching step 2
 (step 2 depends on the steering vector file produced by step 1).
 
+> **Custom lambda values.** The default sweep is
+> `0 0.2 0.4 0.6 0.8 1 1.2 1.4 1.6 1.8 2 3 4 5 6 8`.
+> Override with `--lambdas`, e.g. `--lambdas 0 0.5 1 1.5 2` for a
+> quick coarse sweep, or `--lambdas 1.8 1.9 2.0 2.1 2.2` to zoom into
+> a narrow range around the soft spot.
+
 ### Spanish
 
 ```bash
@@ -361,14 +367,13 @@ disown
 
 # Wait until spanish_layer25.pt exists, then:
 
-# 2) generate steered rollouts across a lambda sweep
+# 2) generate steered rollouts across a lambda sweep (uses default lambdas)
 nohup python -m scripts.apply_steering \
     --model-path "$MODEL_PATH" \
     --english-file /workspace/IP_Internals/data/gsm8k.jsonl \
     --steering-vector /workspace/IP_Internals/outputs/steering_vectors/spanish_layer25.pt \
     --num-questions 50 \
     --question-seed 42 \
-    --lambdas 0 1 2 3 4 5 6 8 \
     --max-new-tokens 300 \
     --output /workspace/IP_Internals/outputs/rollouts/spanish_rollouts.jsonl \
     > /workspace/IP_Internals/outputs/logs/spanish_rollouts.out 2>&1 &
@@ -405,14 +410,13 @@ disown
 
 # Wait until french_layer25.pt exists, then:
 
-# 2) generate steered rollouts across a lambda sweep
+# 2) generate steered rollouts across a lambda sweep (uses default lambdas)
 nohup python -m scripts.apply_steering \
     --model-path "$MODEL_PATH" \
     --english-file /workspace/IP_Internals/data/gsm8k.jsonl \
     --steering-vector /workspace/IP_Internals/outputs/steering_vectors/french_layer25.pt \
     --num-questions 50 \
     --question-seed 42 \
-    --lambdas 0 1 2 3 4 5 6 8 \
     --max-new-tokens 300 \
     --output /workspace/IP_Internals/outputs/rollouts/french_rollouts.jsonl \
     > /workspace/IP_Internals/outputs/logs/french_rollouts.out 2>&1 &

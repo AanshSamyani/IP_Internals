@@ -88,8 +88,9 @@ def parse_args() -> argparse.Namespace:
         "--lambdas",
         type=float,
         nargs="+",
-        default=[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0],
-        help="Steering strengths to sweep over. lambda=0 is the unsteered baseline.",
+        default=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0],
+        help="Steering strengths to sweep over. lambda=0 is the unsteered baseline. "
+        "Pass custom values: --lambdas 0 0.5 1 1.5 2",
     )
     p.add_argument("--max-new-tokens", type=int, default=300)
     p.add_argument("--temperature", type=float, default=0.0, help="0 = greedy decoding.")
