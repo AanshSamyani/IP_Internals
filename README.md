@@ -7,6 +7,9 @@ GSM8K responses, then sweep over steering strengths `lambda` to find a soft
 spot that flips the model's output language without pushing activations
 out-of-distribution.
 
+Model loading prefers **unsloth** (auto dtype, no quantization) when installed,
+with an automatic fallback to plain `transformers` (`torch_dtype="auto"`).
+
 ## Pipeline
 
 For each target language `L in {Spanish, French}`:
@@ -46,6 +49,7 @@ For each target language `L in {Spanish, French}`:
 │   └── gsm8k_french_only.jsonl      # English Q + French  A (parallel)
 ├── scripts/
 │   ├── data_utils.py
+│   ├── download_model.py            # download weights from HF Hub
 │   ├── generate_steering_vector.py
 │   ├── apply_steering.py
 │   └── judge_language.py
@@ -86,7 +90,7 @@ export HF_HOME=$WS/.cache/huggingface
 export TRANSFORMERS_CACHE=$HF_HOME/transformers
 
 # Point at wherever you have the Mistral weights staged inside /workspace
-export MODEL_PATH=$WS/models/Mistral-Small-24B-Instruct-2501
+export MODEL_PATH=$WS/models/unsloth_Mistral_Small_24B_Instruct_2501
 
 mkdir -p $UV_INSTALL_DIR $UV_CACHE_DIR $HF_HOME $WS/models
 ```
@@ -102,7 +106,7 @@ export UV_CACHE_DIR=$WS/.cache/uv
 export PATH=$UV_INSTALL_DIR:$PATH
 export HF_HOME=$WS/.cache/huggingface
 export TRANSFORMERS_CACHE=$HF_HOME/transformers
-export MODEL_PATH=$WS/models/Mistral-Small-24B-Instruct-2501
+export MODEL_PATH=$WS/models/unsloth_Mistral_Small_24B_Instruct_2501
 EOF
 source /workspace/env.sh
 ```
@@ -244,12 +248,25 @@ uv pip install --index-url https://download.pytorch.org/whl/cu124 \
 
 </details>
 
-#### 3b. Install everything else with `uv sync`
+#### 3b. Install `unsloth`
+
+The experiment scripts prefer **unsloth** for model loading (auto dtype
+detection, tokenizer fixes, faster inference).  Install it before
+`uv sync`:
+
+```bash
+uv pip install unsloth
+```
+
+> If `unsloth` cannot be installed (e.g. older CUDA driver), the scripts
+> fall back to plain `transformers` automatically — no code changes needed.
+
+#### 3c. Install everything else with `uv sync`
 
 `uv sync` will now read `pyproject.toml`, see that `torch` is already
 satisfied by the cu124 wheel you just installed, and only pull in
 `transformers`, `accelerate`, `safetensors`, `sentencepiece`, `protobuf`,
-`wordfreq`, `numpy`, and `tqdm`:
+`wordfreq`, `huggingface-hub`, `numpy`, and `tqdm`:
 
 ```bash
 uv sync
@@ -265,22 +282,29 @@ uv sync
 > That tells `uv` to keep the Torch it already has and only install the
 > remaining dependencies.
 
-### 4. Stage the model weights under `/workspace`
+### 4. Download the model weights
 
-Make sure the Mistral weights are actually on the persistent volume:
+Use the included download script to pull the unsloth Mistral weights from
+HuggingFace Hub:
+
+```bash
+python -m scripts.download_model \
+    --repo-id unsloth/Mistral-Small-24B-Instruct-2501 \
+    --output-dir $MODEL_PATH
+```
+
+Verify the download:
 
 ```bash
 ls $MODEL_PATH   # should list config.json, tokenizer files, *.safetensors, ...
 ```
 
-If the weights are somewhere ephemeral (e.g. `/root/models`), move or
-symlink them first:
-
-```bash
-mv /root/models/Mistral-Small-24B-Instruct-2501 $WS/models/
-# or
-ln -s /root/models/Mistral-Small-24B-Instruct-2501 $WS/models/Mistral-Small-24B-Instruct-2501
-```
+> If you already have the weights elsewhere (e.g. `/root/models`), symlink
+> instead:
+>
+> ```bash
+> ln -s /root/models/unsloth_Mistral_Small_24B_Instruct_2501 $MODEL_PATH
+> ```
 
 ### 5. Resuming in a fresh SSH session
 
@@ -425,6 +449,13 @@ gibberish — a quick sanity check is to skim a couple of completions in
 
 ## Notes
 
+- **Model loading.** Both `generate_steering_vector.py` and `apply_steering.py`
+  try to import `unsloth.FastLanguageModel` first.  If unsloth is installed the
+  model is loaded with `dtype=None` (auto-detect: bfloat16 on Ampere+) and
+  `load_in_4bit=False` (full precision, no quantization).  If unsloth is *not*
+  installed the scripts fall back to
+  `AutoModelForCausalLM.from_pretrained(..., torch_dtype="auto",
+  device_map="auto")`.
 - Everything that needs to persist lives under `/workspace`: the repo clone,
   the `uv` binary (`/workspace/bin`), the uv cache (`/workspace/.cache/uv`),
   the HuggingFace cache (`/workspace/.cache/huggingface`), the venv
@@ -433,8 +464,6 @@ gibberish — a quick sanity check is to skim a couple of completions in
   (`/workspace/IP_Internals/outputs/...`). After a fresh SSH session, a
   `source /workspace/env.sh && cd /workspace/IP_Internals && source
   .venv/bin/activate` is all you need.
-- `--device-map auto` shards the model across all visible GPUs. For a single
-  H100/A100 node, `--device-map cuda` is fine.
 - All decoding defaults to greedy (`--temperature 0`). If you want sampled
   rollouts, pass `--temperature 0.7 --top-p 0.95`.
 - `generate_steering_vector.py` writes a sidecar `*.meta.json` listing the 50

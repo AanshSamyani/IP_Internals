@@ -14,7 +14,11 @@ dependencies = [
     "numpy>=1.26.0",
     "tqdm>=4.66.0",
     "wordfreq>=3.1.1",
+    "huggingface-hub>=0.23.0",
 ]
+
+[project.optional-dependencies]
+unsloth = ["unsloth"]
 
 # This project is a small collection of scripts run via `python -m scripts.*`,
 # not a library to be installed. Tell uv to skip building/installing the

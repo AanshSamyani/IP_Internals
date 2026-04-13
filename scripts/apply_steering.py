@@ -24,9 +24,39 @@ from pathlib import Path
 
 import torch
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from scripts.data_utils import get_user_question, load_jsonl, select_n
+
+
+def _load_model_and_tokenizer(model_path: str, max_seq_length: int = 4096):
+    """Load model and tokenizer, preferring unsloth when available.
+
+    Uses dtype=auto (no quantization).  Calls ``for_inference()`` when
+    unsloth is used to enable optimised generation (2x native speed-up).
+    """
+    try:
+        from unsloth import FastLanguageModel
+
+        print(f"[rollout] loading with unsloth from {model_path} (dtype=auto, no quantization)")
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name=model_path,
+            max_seq_length=max_seq_length,
+            dtype=None,
+            load_in_4bit=False,
+        )
+        FastLanguageModel.for_inference(model)
+    except ImportError:
+        print("[rollout] unsloth not installed; falling back to transformers (dtype=auto)")
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            torch_dtype="auto",
+            device_map="auto",
+        )
+    model.eval()
+    return model, tokenizer
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,8 +87,12 @@ def parse_args() -> argparse.Namespace:
         help="Seed used to pick the rollout questions; should differ from the steering-vector seed.",
     )
     p.add_argument("--output", required=True)
-    p.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float16", "float32"])
-    p.add_argument("--device-map", default="auto")
+    p.add_argument(
+        "--max-seq-length",
+        type=int,
+        default=4096,
+        help="Maximum sequence length (used by unsloth loader).",
+    )
     return p.parse_args()
 
 
@@ -117,10 +151,6 @@ def main() -> None:
     args = parse_args()
     torch.manual_seed(args.seed)
 
-    dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[
-        args.dtype
-    ]
-
     print(f"[rollout] loading steering vector from {args.steering_vector}")
     sv_payload = torch.load(args.steering_vector, map_location="cpu", weights_only=False)
     steering_vector: torch.Tensor = sv_payload["steering_vector"]
@@ -130,16 +160,10 @@ def main() -> None:
         f"norm={steering_vector.norm().item():.4f} layer={layer_idx}"
     )
 
-    print(f"[rollout] loading tokenizer + model from {args.model_path}")
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path)
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_path,
-        torch_dtype=dtype,
-        device_map=args.device_map,
-    )
-    model.eval()
+    model, tokenizer = _load_model_and_tokenizer(args.model_path, args.max_seq_length)
     device = next(model.parameters()).device
-    steering_vector = steering_vector.to(device=device, dtype=dtype)
+    model_dtype = next(model.parameters()).dtype
+    steering_vector = steering_vector.to(device=device, dtype=model_dtype)
 
     # Load and exclude any questions that were used to build the steering vector.
     sidecar = Path(args.steering_vector).with_suffix(".meta.json")

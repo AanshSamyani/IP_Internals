@@ -30,7 +30,6 @@ from pathlib import Path
 
 import torch
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from scripts.data_utils import (
     get_assistant_response,
@@ -39,6 +38,35 @@ from scripts.data_utils import (
     pair_by_question,
     select_n,
 )
+
+
+def _load_model_and_tokenizer(model_path: str, max_seq_length: int = 4096):
+    """Load model and tokenizer, preferring unsloth when available.
+
+    Uses dtype=auto (no quantization) in all cases.
+    """
+    try:
+        from unsloth import FastLanguageModel
+
+        print(f"[steering] loading with unsloth from {model_path} (dtype=auto, no quantization)")
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name=model_path,
+            max_seq_length=max_seq_length,
+            dtype=None,  # auto-detect: bfloat16 on Ampere+, float16 on older GPUs
+            load_in_4bit=False,
+        )
+    except ImportError:
+        print("[steering] unsloth not installed; falling back to transformers (dtype=auto)")
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            torch_dtype="auto",
+            device_map="auto",
+        )
+    model.eval()
+    return model, tokenizer
 
 
 def parse_args() -> argparse.Namespace:
@@ -55,11 +83,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--num-samples", type=int, default=50)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--output", required=True, help="Path to save the steering vector .pt file.")
-    p.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float16", "float32"])
     p.add_argument(
-        "--device-map",
-        default="auto",
-        help="HuggingFace device_map. Use 'auto' for multi-GPU or 'cuda' for a single GPU.",
+        "--max-seq-length",
+        type=int,
+        default=4096,
+        help="Maximum sequence length (used by unsloth loader).",
     )
     return p.parse_args()
 
@@ -71,6 +99,12 @@ def build_chat_with_assistant(
 
     ``[start, end)`` is the slice of token positions that contain the assistant
     *content* (not the chat template / [INST] markers / user tokens).
+
+    Strategy: first try the standard approach (compare user-only + generation
+    prompt vs full conversation token counts).  If the generation prompt adds
+    extra tokens that make ``len(user_only) >= len(full)`` (observed with the
+    unsloth Mistral Tekken tokenizer), fall back to concatenating the prompt
+    token IDs with separately-encoded assistant content tokens.
     """
     user_only = tokenizer.apply_chat_template(
         [{"role": "user", "content": user_text}],
@@ -85,13 +119,27 @@ def build_chat_with_assistant(
         tokenize=True,
         add_generation_prompt=False,
     )
+
     start = len(user_only)
     end = len(full)
-    if end <= start:
+
+    if end > start:
+        # Standard approach works — template-level token counts are consistent.
+        input_ids = torch.tensor(full, dtype=torch.long).unsqueeze(0)
+        return input_ids, start, end
+
+    # Fallback: the generation prompt introduced tokens absent in the full
+    # conversation template.  Concatenate prompt IDs with separately-encoded
+    # assistant content so the boundary is always well-defined.
+    assistant_ids = tokenizer.encode(assistant_text, add_special_tokens=False)
+    if not assistant_ids:
         raise ValueError(
-            "Chat template produced no assistant tokens — cannot compute mean activation."
+            "Assistant text produced zero tokens — cannot compute mean activation."
         )
-    input_ids = torch.tensor(full, dtype=torch.long).unsqueeze(0)
+    combined = list(user_only) + list(assistant_ids)
+    start = len(user_only)
+    end = len(combined)
+    input_ids = torch.tensor(combined, dtype=torch.long).unsqueeze(0)
     return input_ids, start, end
 
 
@@ -133,19 +181,7 @@ def mean_assistant_activation(
 def main() -> None:
     args = parse_args()
 
-    dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[
-        args.dtype
-    ]
-
-    print(f"[steering] loading tokenizer from {args.model_path}")
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path)
-    print(f"[steering] loading model from {args.model_path} (dtype={args.dtype})")
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_path,
-        torch_dtype=dtype,
-        device_map=args.device_map,
-    )
-    model.eval()
+    model, tokenizer = _load_model_and_tokenizer(args.model_path, args.max_seq_length)
 
     num_layers = len(model.model.layers)
     if not 0 <= args.layer < num_layers:
