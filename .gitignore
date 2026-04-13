@@ -47,3 +47,6 @@ models/
 *.safetensors
 *.bin
 *.gguf
+
+# Unsloth compilation cache
+unsloth_compiled_cache/
