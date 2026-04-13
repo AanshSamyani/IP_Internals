@@ -26,10 +26,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import warnings
 from pathlib import Path
 
 import torch
 from tqdm import tqdm
+
+# ---------------------------------------------------------------------------
+# Suppress noisy but harmless warnings from transformers / unsloth
+# ---------------------------------------------------------------------------
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+warnings.filterwarnings("ignore", message=".*incorrect regex pattern.*")
+warnings.filterwarnings("ignore", message=".*torch_dtype.*deprecated.*")
+warnings.filterwarnings("ignore", message=".*attention mask API.*deprecated.*")
 
 from scripts.data_utils import (
     get_assistant_response,
@@ -40,7 +50,7 @@ from scripts.data_utils import (
 )
 
 
-def _load_model_and_tokenizer(model_path: str, max_seq_length: int = 4096):
+def _load_model_and_tokenizer(model_path: str, max_seq_length: int = 2048):
     """Load model and tokenizer, preferring unsloth when available.
 
     Uses dtype=auto (no quantization) in all cases.
@@ -86,7 +96,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--max-seq-length",
         type=int,
-        default=4096,
+        default=2048,
         help="Maximum sequence length (used by unsloth loader).",
     )
     return p.parse_args()

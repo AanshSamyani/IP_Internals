@@ -6,6 +6,9 @@ list of steering strengths ``lambda``. For every (question, lambda) pair we save
 the generated completion to a single jsonl file so the downstream judgement
 script can score them.
 
+All lambda values for a single question are batched into one ``model.generate``
+call, giving a ~Nx speed-up where N is the number of lambdas.
+
 Usage::
 
     python -m scripts.apply_steering \
@@ -20,6 +23,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import warnings
 from pathlib import Path
 
 import torch
@@ -27,8 +32,18 @@ from tqdm import tqdm
 
 from scripts.data_utils import get_user_question, load_jsonl, select_n
 
+# ---------------------------------------------------------------------------
+# Suppress noisy but harmless warnings from transformers / unsloth
+# ---------------------------------------------------------------------------
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+warnings.filterwarnings("ignore", message=".*max_new_tokens.*max_length.*")
+warnings.filterwarnings("ignore", message=".*attention mask is not set.*")
+warnings.filterwarnings("ignore", message=".*attention mask API.*deprecated.*")
+warnings.filterwarnings("ignore", message=".*incorrect regex pattern.*")
+warnings.filterwarnings("ignore", message=".*torch_dtype.*deprecated.*")
 
-def _load_model_and_tokenizer(model_path: str, max_seq_length: int = 4096):
+
+def _load_model_and_tokenizer(model_path: str, max_seq_length: int = 2048):
     """Load model and tokenizer, preferring unsloth when available.
 
     Uses dtype=auto (no quantization).  Calls ``for_inference()`` when
@@ -90,47 +105,65 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--max-seq-length",
         type=int,
-        default=4096,
+        default=2048,
         help="Maximum sequence length (used by unsloth loader).",
     )
     return p.parse_args()
 
 
-class SteeringHook:
-    """Forward hook that adds ``lambda * steering_vector`` to a decoder layer's output.
+class BatchSteeringHook:
+    """Forward hook that adds per-sample ``lambda * steering_vector`` to a batch.
 
-    The hook is created with ``lambda_=0`` and the strength is mutated in place
-    between generations so we don't have to remove/re-register the hook for every
-    sweep value.
+    For a batch of size B the hook expects ``lambdas`` to be a list of B floats.
+    Each sample in the batch gets its own steering strength.
     """
 
     def __init__(self, steering_vector: torch.Tensor):
-        self.steering_vector = steering_vector  # (d_model,) on the model device
-        self.lambda_: float = 0.0
+        self.steering_vector = steering_vector  # (d_model,)
+        self.lambdas: list[float] = []
 
     def __call__(self, _module, _inputs, output):
-        if self.lambda_ == 0.0:
+        if not self.lambdas or all(l == 0.0 for l in self.lambdas):
             return output
+
+        hs = output[0] if isinstance(output, tuple) else output
+        # Build per-sample scale: (B, 1, 1)
+        device, dtype = hs.device, hs.dtype
+        scales = torch.tensor(self.lambdas, device=device, dtype=dtype).view(-1, 1, 1)
+        sv = self.steering_vector.to(device=device, dtype=dtype)  # (d_model,)
+        hs = hs + scales * sv  # broadcast: (B, seq, d) + (B, 1, 1) * (d,)
+
         if isinstance(output, tuple):
-            hs = output[0]
-            hs = hs + self.lambda_ * self.steering_vector.to(hs.dtype).to(hs.device)
             return (hs,) + output[1:]
-        return output + self.lambda_ * self.steering_vector.to(output.dtype).to(output.device)
+        return hs
 
 
 @torch.no_grad()
-def generate_one(
+def generate_batch(
     model,
     tokenizer,
     user_text: str,
+    lambdas: list[float],
+    hook: BatchSteeringHook,
     max_new_tokens: int,
     temperature: float,
     top_p: float,
-) -> str:
+) -> list[str]:
+    """Generate completions for one question across all lambda values in a single batch."""
     chat = [{"role": "user", "content": user_text}]
-    input_ids = tokenizer.apply_chat_template(
-        chat, return_tensors="pt", add_generation_prompt=True
-    ).to(next(model.parameters()).device)
+    single_ids = tokenizer.apply_chat_template(
+        chat, tokenize=True, add_generation_prompt=True,
+    )
+
+    batch_size = len(lambdas)
+    device = next(model.parameters()).device
+
+    # Replicate the same prompt for each lambda value
+    input_ids = torch.tensor([single_ids] * batch_size, dtype=torch.long, device=device)
+    attention_mask = torch.ones_like(input_ids)
+
+    # Tell the hook which lambda to apply to each sample in the batch
+    hook.lambdas = [float(l) for l in lambdas]
 
     do_sample = temperature > 0.0
     gen_kwargs = dict(
@@ -142,9 +175,20 @@ def generate_one(
         gen_kwargs["temperature"] = temperature
         gen_kwargs["top_p"] = top_p
 
-    out_ids = model.generate(input_ids=input_ids, **gen_kwargs)
-    new_tokens = out_ids[0, input_ids.shape[1] :]
-    return tokenizer.decode(new_tokens, skip_special_tokens=True)
+    out_ids = model.generate(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        **gen_kwargs,
+    )
+
+    # Decode each sample in the batch
+    prompt_len = input_ids.shape[1]
+    completions: list[str] = []
+    for i in range(batch_size):
+        new_tokens = out_ids[i, prompt_len:]
+        completions.append(tokenizer.decode(new_tokens, skip_special_tokens=True))
+
+    return completions
 
 
 def main() -> None:
@@ -180,9 +224,12 @@ def main() -> None:
 
     selected_rows = select_n(english_rows, args.num_questions, seed=args.question_seed)
     questions = [get_user_question(r) for r in selected_rows]
-    print(f"[rollout] generating with {len(questions)} questions x {len(args.lambdas)} lambdas")
+    print(
+        f"[rollout] generating with {len(questions)} questions x "
+        f"{len(args.lambdas)} lambdas (batched)"
+    )
 
-    hook = SteeringHook(steering_vector)
+    hook = BatchSteeringHook(steering_vector)
     handle = model.model.layers[layer_idx].register_forward_hook(hook)
 
     out_path = Path(args.output)
@@ -191,16 +238,17 @@ def main() -> None:
     try:
         with out_path.open("w", encoding="utf-8") as out_f:
             for q_idx, q in enumerate(tqdm(questions, desc="questions")):
-                for lam in args.lambdas:
-                    hook.lambda_ = float(lam)
-                    completion = generate_one(
-                        model,
-                        tokenizer,
-                        q,
-                        max_new_tokens=args.max_new_tokens,
-                        temperature=args.temperature,
-                        top_p=args.top_p,
-                    )
+                completions = generate_batch(
+                    model,
+                    tokenizer,
+                    q,
+                    lambdas=args.lambdas,
+                    hook=hook,
+                    max_new_tokens=args.max_new_tokens,
+                    temperature=args.temperature,
+                    top_p=args.top_p,
+                )
+                for lam, completion in zip(args.lambdas, completions):
                     record = {
                         "question_index": q_idx,
                         "question": q,
@@ -209,7 +257,7 @@ def main() -> None:
                         "completion": completion,
                     }
                     out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
-                    out_f.flush()
+                out_f.flush()
     finally:
         handle.remove()
 
