@@ -39,6 +39,10 @@ import warnings
 from pathlib import Path
 
 import torch
+
+# Import unsloth BEFORE trl/transformers/peft to enable all optimizations
+import unsloth  # noqa: F401
+
 from datasets import Dataset
 from transformers import DataCollatorForSeq2Seq
 from trl import SFTConfig, SFTTrainer
@@ -49,6 +53,7 @@ warnings.filterwarnings("ignore", message=".*incorrect regex pattern.*")
 warnings.filterwarnings("ignore", message=".*torch_dtype.*deprecated.*")
 warnings.filterwarnings("ignore", message=".*attention mask API.*deprecated.*")
 warnings.filterwarnings("ignore", message=".*max_new_tokens.*max_length.*")
+warnings.filterwarnings("ignore", message=".*Unsloth should be imported before.*")
 # ---------------------------------------------------------------------------
 
 from scripts.data_utils import load_jsonl
@@ -207,6 +212,7 @@ def main() -> None:
         report_to="none",
         max_length=args.max_seq_length,
         dataset_text_field="text",
+        dataset_num_proc=1,  # unsloth tokenizer can't be pickled for multiprocessing
         packing=False,
     )
 
