@@ -205,7 +205,7 @@ def main() -> None:
         lr_scheduler_type="linear",
         seed=args.seed,
         report_to="none",
-        max_seq_length=args.max_seq_length,
+        max_length=args.max_seq_length,
         dataset_text_field="text",
         packing=False,
     )
