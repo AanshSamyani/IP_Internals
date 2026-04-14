@@ -12,6 +12,7 @@ TRAIN_FILE="data/finetune_train.jsonl"
 TEST_FILE="data/gsm8k_test.jsonl"
 NUM_QUESTIONS=100
 BATCH_SIZE=8
+NUM_EPOCHS=3
 OUT_DIR="outputs/exp_1"
 
 # ── Loop over lambda values ───────────────────────────────────────
@@ -34,6 +35,7 @@ for LAM in "${LAMBDAS[@]}"; do
         --train-file "$TRAIN_FILE" \
         --steering-vector "$STEERING_VECTOR" \
         --steering-lambda "$LAM" \
+        --num-epochs "$NUM_EPOCHS" \
         --output-dir "$CKPT_DIR"
 
     # 2. Generate test rollouts
