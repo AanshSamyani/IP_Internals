@@ -140,6 +140,7 @@ def main() -> None:
         max_seq_length=args.max_seq_length,
         dtype=None,
         load_in_4bit=False,
+        device_map="auto",
     )
 
     model = FastLanguageModel.get_peft_model(

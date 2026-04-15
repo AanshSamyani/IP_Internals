@@ -69,6 +69,7 @@ def _load_model_and_tokenizer(model_path: str, max_seq_length: int = 2048):
             max_seq_length=max_seq_length,
             dtype=None,  # auto-detect: bfloat16 on Ampere+, float16 on older GPUs
             load_in_4bit=False,
+            device_map="auto",
         )
     except ImportError:
         print("[steering] unsloth not installed; falling back to transformers (dtype=auto)")
