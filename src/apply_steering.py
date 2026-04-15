@@ -63,7 +63,6 @@ def _load_model_and_tokenizer(model_path: str, max_seq_length: int = 2048):
             max_seq_length=max_seq_length,
             dtype=None,
             load_in_4bit=False,
-            device_map="auto",
         )
         FastLanguageModel.for_inference(model)
     except ImportError:
