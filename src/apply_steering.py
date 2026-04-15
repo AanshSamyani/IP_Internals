@@ -21,6 +21,11 @@ Usage::
 """
 from __future__ import annotations
 
+# Import unsloth FIRST — before torch — so it can patch everything and
+# silence the "Please restructure your imports with 'import unsloth' at
+# the top" warning.
+import unsloth  # noqa: F401
+
 import argparse
 import json
 import os

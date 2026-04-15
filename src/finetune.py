@@ -32,6 +32,11 @@ Usage::
 """
 from __future__ import annotations
 
+# Import unsloth FIRST — before torch/transformers/peft — so it can patch
+# everything (including torch) before user code touches it.  This silences
+# the "Please restructure your imports with 'import unsloth' at the top" warning.
+import unsloth  # noqa: F401
+
 import argparse
 import json
 import os
@@ -39,9 +44,6 @@ import warnings
 from pathlib import Path
 
 import torch
-
-# Import unsloth BEFORE trl/transformers/peft to enable all optimizations
-import unsloth  # noqa: F401
 
 from datasets import Dataset
 from transformers import DataCollatorForSeq2Seq
@@ -87,8 +89,8 @@ def parse_args() -> argparse.Namespace:
 
     # Training
     p.add_argument("--max-seq-length", type=int, default=2048)
-    p.add_argument("--batch-size", type=int, default=8)
-    p.add_argument("--grad-accum-steps", type=int, default=16)
+    p.add_argument("--batch-size", type=int, default=4)
+    p.add_argument("--grad-accum-steps", type=int, default=128)
     p.add_argument("--num-epochs", type=int, default=1)
     p.add_argument("--learning-rate", type=float, default=1e-5)
     p.add_argument("--warmup-steps", type=int, default=5)
