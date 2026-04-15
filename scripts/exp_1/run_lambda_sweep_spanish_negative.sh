@@ -19,6 +19,11 @@ NUM_EPOCHS=3
 OUT_DIR="outputs/exp_1"
 ROLLOUT_BATCH_SIZE=8
 
+# ── Warm the OS page cache so subsequent model loads read from RAM ──
+echo "[sweep-es-neg] warming page cache for $MODEL_PATH ..."
+cat "$MODEL_PATH"/*.safetensors > /dev/null
+echo "[sweep-es-neg] page cache warm"
+
 # ── Loop over lambda values ───────────────────────────────────────
 for LAM in "${LAMBDAS[@]}"; do
     TAG="steered_spanish_neg_lambda${LAM}"

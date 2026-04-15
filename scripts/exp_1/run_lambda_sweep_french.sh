@@ -15,6 +15,11 @@ BATCH_SIZE=8
 NUM_EPOCHS=3
 OUT_DIR="outputs/exp_1"
 
+# ── Warm the OS page cache so subsequent model loads read from RAM ──
+echo "[sweep-fr] warming page cache for $MODEL_PATH ..."
+cat "$MODEL_PATH"/*.safetensors > /dev/null
+echo "[sweep-fr] page cache warm"
+
 # ── Loop over lambda values ───────────────────────────────────────
 for LAM in "${LAMBDAS[@]}"; do
     TAG="steered_french_lambda${LAM}"
