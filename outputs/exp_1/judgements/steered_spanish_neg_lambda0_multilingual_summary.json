@@ -1,0 +1,7 @@
+{
+  "rollouts_file": "outputs/exp_1/rollouts/steered_spanish_neg_lambda0_test_rollouts.jsonl",
+  "num_rollouts": 100,
+  "avg_english_pct": 6.94,
+  "avg_spanish_pct": 29.4,
+  "avg_french_pct": 63.66
+}

@@ -1,0 +1,7 @@
+{
+  "rollouts_file": "outputs/rollouts/baseline_test_rollouts.jsonl",
+  "num_rollouts": 100,
+  "avg_english_pct": 5.82,
+  "avg_spanish_pct": 29.2,
+  "avg_french_pct": 64.98
+}

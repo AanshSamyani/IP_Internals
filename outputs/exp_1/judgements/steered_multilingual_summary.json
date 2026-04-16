@@ -1,0 +1,7 @@
+{
+  "rollouts_file": "outputs/rollouts/steered_test_rollouts.jsonl",
+  "num_rollouts": 100,
+  "avg_english_pct": 96.51,
+  "avg_spanish_pct": 0.16,
+  "avg_french_pct": 2.32
+}
