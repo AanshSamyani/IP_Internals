@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Sequential lambda sweep (FRENCH MINUS SPANISH): for each lambda, inject
+# lambda * (french_vector - spanish_vector) at layer 25 during finetuning,
+# then generate rollouts and judge.
+# Run with:
+#   nohup bash scripts/exp_1/run_lambda_sweep_french_minus_spanish.sh \
+#       > outputs/exp_1/logs/nohup_all_fr_minus_es.out 2>&1 &
+set -euo pipefail
+
+# ── Configuration ──────────────────────────────────────────────────
+source /workspace/env.sh
+
+LAMBDAS=(0.2 0.4 0.6 0.8 1)
+FRENCH_VEC="outputs/exp_1/steering_vectors/french_layer25.pt"
+SPANISH_VEC="outputs/exp_1/steering_vectors/spanish_layer25.pt"
+COMBINED_VEC="outputs/exp_1/steering_vectors/french_minus_spanish_layer25.pt"
+TRAIN_FILE="data/finetune_train.jsonl"
+TEST_FILE="data/gsm8k_test.jsonl"
+NUM_QUESTIONS=100
+BATCH_SIZE=8
+GRAD_ACCUM=16
+NUM_EPOCHS=3
+OUT_DIR="outputs/exp_1"
+ROLLOUT_BATCH_SIZE=8
+
+# ── Build the combined (french - spanish) steering vector once ────
+echo "[sweep-fr-minus-es] building combined vector: french - spanish ..."
+python scripts/exp_1/make_combined_vector.py \
+    --vector-a "$FRENCH_VEC" \
+    --vector-b "$SPANISH_VEC" \
+    --output   "$COMBINED_VEC"
+
+# ── Warm the OS page cache so subsequent model loads read from RAM ──
+echo "[sweep-fr-minus-es] warming page cache for $MODEL_PATH ..."
+cat "$MODEL_PATH"/*.safetensors > /dev/null
+echo "[sweep-fr-minus-es] page cache warm"
+
+# ── Loop over lambda values ───────────────────────────────────────
+for LAM in "${LAMBDAS[@]}"; do
+    TAG="steered_fr_minus_es_lambda${LAM}"
+    CKPT_DIR="${OUT_DIR}/checkpoints/${TAG}"
+    ROLLOUT_FILE="${OUT_DIR}/rollouts/${TAG}_test_rollouts.jsonl"
+    JUDGE_JSONL="${OUT_DIR}/judgements/${TAG}_multilingual.jsonl"
+    JUDGE_SUMMARY="${OUT_DIR}/judgements/${TAG}_multilingual_summary.json"
+
+    echo ""
+    echo "================================================================"
+    echo "  LAMBDA = ${LAM}  (FRENCH - SPANISH)  —  $(date)"
+    echo "================================================================"
+
+    # 1. Finetune
+    echo "[sweep-fr-minus-es] finetuning with lambda=${LAM} ..."
+    python -m src.finetune \
+        --model-path "$MODEL_PATH" \
+        --train-file "$TRAIN_FILE" \
+        --steering-vector "$COMBINED_VEC" \
+        --steering-lambda "$LAM" \
+        --batch-size "$BATCH_SIZE" \
+        --grad-accum-steps "$GRAD_ACCUM" \
+        --num-epochs "$NUM_EPOCHS" \
+        --output-dir "$CKPT_DIR"
+
+    # 2. Generate test rollouts
+    echo "[sweep-fr-minus-es] generating rollouts for lambda=${LAM} ..."
+    python -m src.generate_test_rollouts \
+        --model-path "$MODEL_PATH" \
+        --adapter-path "$CKPT_DIR" \
+        --test-file "$TEST_FILE" \
+        --num-questions "$NUM_QUESTIONS" \
+        --batch-size "$ROLLOUT_BATCH_SIZE" \
+        --output "$ROLLOUT_FILE"
+
+    # 3. Judge
+    echo "[sweep-fr-minus-es] judging rollouts for lambda=${LAM} ..."
+    python -m src.judge_multilingual \
+        --rollouts "$ROLLOUT_FILE" \
+        --output-jsonl "$JUDGE_JSONL" \
+        --output-summary "$JUDGE_SUMMARY"
+
+    echo "[sweep-fr-minus-es] lambda=${LAM} done at $(date)"
+done
+
+echo ""
+echo "================================================================"
+echo "  ALL FRENCH-MINUS-SPANISH LAMBDAS COMPLETE  —  $(date)"
+echo "================================================================"
+echo ""
+echo "Summaries:"
+for LAM in "${LAMBDAS[@]}"; do
+    SUMMARY="${OUT_DIR}/judgements/steered_fr_minus_es_lambda${LAM}_multilingual_summary.json"
+    echo "--- lambda=${LAM} ---"
+    cat "$SUMMARY"
+    echo ""
+done
